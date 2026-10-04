@@ -75,6 +75,30 @@ srv.ServeRW(rw, func(cols, rows uint16) {
 })
 ```
 
+### Socket-Free Server Transport
+
+`NewServerConn` accepts a `ServerDatagramConn` instead of opening a UDP socket.
+Use it to embed the server in an authenticated tunnel or an in-memory session:
+
+```go
+srv, err := mosh.NewServerConn("", datagrams, 60001)
+if err != nil {
+  return err
+}
+return srv.ServeRW(terminal, resize)
+```
+
+The datagram transport implements `ReadFromUDP`, `WriteToUDP`,
+`SetReadDeadline`, and `Close`. Each read and write carries exactly one
+datagram. Reads must respect deadlines; closing must unblock pending reads.
+The UDP address values can identify virtual peers and do not require actual
+network sockets. The port is metadata, not a bind request.
+
+The server owns the supplied transport after successful initialization and
+closes it on shutdown. The caller retains ownership if initialization fails.
+When using `ServeRW`, close the supplied terminal I/O to end the session.
+`NewServer` retains its existing UDP-listener behavior.
+
 ## Compatibility
 
 Tested against the C reference implementation:

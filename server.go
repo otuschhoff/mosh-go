@@ -15,8 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/unixshells/vt-go"
 	"github.com/creack/pty"
+	"github.com/unixshells/vt-go"
 )
 
 const (
@@ -31,14 +31,24 @@ const (
 	defaultRows = 24
 )
 
-// Server is a native mosh server. It listens on UDP, runs a shell in a PTY,
-// bridges data through the SSP transport, and diffs terminal framebuffers
-// to produce HostMessage updates for the client.
+// ServerDatagramConn is a caller-provided datagram transport for a server.
+// UDP address values may represent virtual endpoints; no socket is required.
+// ReadFromUDP must preserve datagram boundaries and respect read deadlines.
+// Close must unblock reads. The server owns the connection after successful setup.
+type ServerDatagramConn interface {
+	ReadFromUDP([]byte) (int, *net.UDPAddr, error)
+	WriteToUDP([]byte, *net.UDPAddr) (int, error)
+	SetReadDeadline(time.Time) error
+	Close() error
+}
+
+// Server runs a shell or external terminal I/O over a datagram transport,
+// using SSP and terminal framebuffer diffs to produce HostMessage updates.
 type Server struct {
 	key  []byte
 	ocb  *OCB
 	port int
-	conn *net.UDPConn
+	conn ServerDatagramConn
 	ptmx *os.File
 	cmd  *exec.Cmd
 
@@ -75,6 +85,24 @@ func GenerateKey() ([]byte, string, error) {
 // NewServer creates a native mosh server.
 // It binds a UDP port, generates a key, and is ready to serve.
 func NewServer(shell string, portLow, portHigh int) (*Server, error) {
+	conn, port, err := BindUDP(portLow, portHigh)
+	if err != nil {
+		return nil, err
+	}
+	server, err := NewServerConn(shell, conn, port)
+	if err != nil {
+		conn.Close()
+	}
+	return server, err
+}
+
+// NewServerConn creates a server over an existing datagram transport without
+// binding a network socket. The port is connection metadata and may be virtual.
+// The caller retains ownership of conn if initialization fails.
+func NewServerConn(shell string, conn ServerDatagramConn, port int) (*Server, error) {
+	if conn == nil {
+		return nil, fmt.Errorf("mosh: nil server datagram connection")
+	}
 	key, _, err := GenerateKey()
 	if err != nil {
 		return nil, err
@@ -89,11 +117,6 @@ func NewServer(shell string, portLow, portHigh int) (*Server, error) {
 		if shell == "" {
 			shell = "/bin/sh"
 		}
-	}
-
-	conn, port, err := BindUDP(portLow, portHigh)
-	if err != nil {
-		return nil, err
 	}
 
 	return &Server{
